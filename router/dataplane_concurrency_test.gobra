@@ -12,13 +12,6 @@ ensures ElemWitness(y, k, e)
 func AssumeElemWitness(ghost y ElemRA, ghost k Key, ghost e Elem)
 
 type Pkt []byte
-//pred PktMem(Pkt)
-
-ghost
-decreases
-pure func IfsToIO_ifs(ifs uint16) option[io.IO_ifs]{
-    return ifs == 0 ? none[io.IO_ifs] : some(io.IO_ifs(ifs))
-}
 
 ghost
 decreases
@@ -125,32 +118,118 @@ ensures acc(sl.AbsSlice_Bytes(p, 0, len(p)), _)
 ensures newPkt.isIO_val_Pkt2 ==> ElemWitness(y.OBufY, newPkt.IO_val_Pkt2_1, newPkt.IO_val_Pkt2_2)
 func processPkt(p Pkt, ghost ingressID uint16, ghost m *sync.Mutex, ghost y SharedArg, ghost dp io.DataPlaneSpec) (ghost newPkt io.IO_val) {
   var pathType int
-  assume IO_val_Abs(p).isIO_val_Pkt2 ==> pathType == 1
-  assume pathType == 1 ==> IO_val_Abs(p).isIO_val_Pkt2
+  //assume IO_val_Abs(p).isIO_val_Pkt2 ==> pathType == 1
+  //assume pathType == 1 ==> IO_val_Abs(p).isIO_val_Pkt2
   if pathType == 1 {
     //assume IfsToIO_ifs(ingressID) == IO_val_Abs(p).IO_val_Pkt2_1
-    //Process(p, ingressID, m, y)
-    assume newPkt.isIO_val_Pkt2
-    AssumeElemWitness(y.OBufY, newPkt.IO_val_Pkt2_1, newPkt.IO_val_Pkt2_2)
+    newPkt = Process(p, m, y, dp)
+    //assume newPkt.isIO_val_Pkt2
+    //AssumeElemWitness(y.OBufY, newPkt.IO_val_Pkt2_1, newPkt.IO_val_Pkt2_2)
   } else {
     assume !newPkt.isIO_val_Pkt2
   }
   return newPkt
 }
 
-/*
-requires PktMem(p)
-requires acc(m.LockP(), _) && m.LockInv() == SharedInv!< y !>;
-requires IO_val_Abs(p).isIO_val_Pkt2
-requires ElemWitness(y.IBufY, ID(ingressID), IO_val_Abs(p).IO_val_Pkt2_2)
-requires IO_val_Abs(p).IO_val_Pkt2_1 == ID(ingressID)
-func Process(p Pkt, ghost ingressID uint16, ghost m *sync.Mutex, ghost y SharedArg) {
+
+requires dp.Valid()
+requires acc(sl.AbsSlice_Bytes(p, 0, len(p)), _)
+requires acc(m.LockP(), _) && m.LockInv() == SharedInv!< dp, y !>;
+requires IO_val_Abs(p).isIO_val_Pkt2 ==> ElemWitness(y.IBufY, IO_val_Abs(p).IO_val_Pkt2_1, IO_val_Abs(p).IO_val_Pkt2_2)
+ensures acc(sl.AbsSlice_Bytes(p, 0, len(p)), _)
+ensures newPkt.isIO_val_Pkt2 ==> ElemWitness(y.OBufY, newPkt.IO_val_Pkt2_1, newPkt.IO_val_Pkt2_2)
+func Process(p Pkt, ghost m *sync.Mutex, ghost y SharedArg, ghost dp io.DataPlaneSpec) (ghost newPkt io.IO_val) {
     ghost pkt := IO_val_Abs(p)
-    ghost newpkt, egressID := check(p)
+   // ghost ingressID := pkt.IO_val_Pkt2_1
+    assume pkt.isIO_val_Pkt2
+
+    //inbound
+    ghost if(pkt.IO_val_Pkt2_1 != none[io.IO_ifs]) {
+        assume false
+    } else {
+        //exit
+    
+        ghost m.Lock()
+        unfold SharedInv!< dp, y !>()
+
+        t, s := *y.Place, *y.State
+
+        ApplyElemWitness(s.ibuf, y.IBufY, pkt.IO_val_Pkt2_1, pkt.IO_val_Pkt2_2)
+	    assert pkt.IO_val_Pkt2_2 in AsSet(s.ibuf[pkt.IO_val_Pkt2_1])
+
+        ghost currseg := pkt.IO_val_Pkt2_2.CurrSeg
+        assume len(currseg.Future) > 0 //should be trivial to proof
+        
+
+        ghost traversedseg := io.IO_seg3_ {
+			AInfo: currseg.AInfo,
+			UInfo: currseg.ConsDir ? io.upd_uinfo(currseg.UInfo, currseg.Future[0]) : currseg.UInfo, //carefull
+			ConsDir: currseg.ConsDir,
+			Peer: currseg.Peer,
+			Past: seq[io.IO_HF]{currseg.Future[0]} ++ currseg.Past,
+			Future: currseg.Future[1:],
+			History: seq[io.IO_ahi]{currseg.Future[0].Toab()} ++ currseg.History}
+        //io.establishGuardTraversedsegInc(pkt.IO_val_Pkt2_2.CurrSeg)
+        ghost option_nextif := currseg.ConsDir ? currseg.Future[0].EgIF2 : currseg.Future[0].InIF2
+        assume option_nextif != none[io.IO_ifs]
+        ghost nextif := get(option_nextif) //proof
+        assert io.dp2_exit_interface(currseg.ConsDir, dp.Asid(), currseg.Future[0], nextif)
+
+
+        // newPkt = io.IO_val(
+        //     io.IO_val_Pkt2{
+        //         nextIF,
+        //         io.IO_pkt2(io.IO_Packet2{traversedseg, pkt.IO_val_Pkt2_2.LeftSeg, pkt.IO_val_Pkt2_2.MidSeg, pkt.IO_val_Pkt2_2.RightSeg})
+        //     })
+            
+        assert io.same_other2(currseg, traversedseg)
+        assert io.update_uinfo(currseg.ConsDir, currseg, traversedseg, currseg.Future[0])
+        assert io.inc_seg2(currseg, traversedseg, currseg.Future[0], currseg.Future[1:])
+        assume nextif in domain(dp.neighborIAs)
+        ghost a2 := dp.GetNeighborIA(nextif)
+        ghost i2 := dp.Lookup(io.AsIfsPair{dp.Asid(), nextif}).ifs
+        assume dp.is_target(dp.Asid(), nextif, a2, i2) //assume as precondition
+        assume dp.hf_valid(currseg.ConsDir, currseg.AInfo, currseg.UInfo, currseg.Future[0]) //should be true by construction
+
+
+        ghost pkt_internal := io.IO_val(io.IO_Internal_val2{ 
+            pkt.IO_val_Pkt2_2, 
+            io.IO_pkt2(io.IO_Packet2{traversedseg, pkt.IO_val_Pkt2_2.LeftSeg, pkt.IO_val_Pkt2_2.MidSeg, pkt.IO_val_Pkt2_2.RightSeg}), 
+            nextif})
+       // newPkt = 
+
+        assert dp.dp3s_forward_ext(pkt_internal.IO_Internal_val2_1, pkt_internal.IO_Internal_val2_2, pkt_internal.IO_Internal_val2_3)
+
+        assert dp.dp3s_iospec_bio3s_exit_guard(s, t, pkt_internal)
+
+        unfold dp.dp3s_iospec_ordered(s, t)
+	    unfold dp.dp3s_iospec_bio3s_exit(s, t)
+
+        tN := io.dp3s_iospec_bio3s_exit_T(t, pkt_internal)
+        io.Exit(t, pkt_internal) //Event
+
+        newPkt = io.IO_val(io.IO_val_Pkt2{some(pkt_internal.IO_Internal_val2_3), pkt_internal.IO_Internal_val2_2})
+        UpdateElemWitness(s.obuf, y.OBufY, newPkt.IO_val_Pkt2_1, newPkt.IO_val_Pkt2_2)
+        
+        ghost *y.State = io.dp3s_add_obuf(s, newPkt.IO_val_Pkt2_1, newPkt.IO_val_Pkt2_2)
+	    ghost *y.Place = tN
+        
+        fold SharedInv!< dp, y !>()
+        ghost m.Unlock()
+        
+    }
+    //inbound
+
+    //outbound
+
+
+
+    //ghost newpkt, egressID := check(p)
     //assume pkt.IO_val_Pkt2_1 == ID(ingressID)
     //Inbound
     //enter
-
+}
+/*
     ghost if ID(ingressID) != none[io.IO_ifs] { //we have to proof this 
         ghost pkt_internal := io.IO_Pkt2ToIO_Internal_val1(pkt)
         assert pkt_internal.IO_Internal_val1_2 == io.IO_ifs(ingressID)
