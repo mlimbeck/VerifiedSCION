@@ -2,7 +2,7 @@ package router
 
 import (
 	"sync"
-	io "github.com/scionproto/scion/verification/io"
+	io "verification/io"
   sl "github.com/scionproto/scion/verification/utils/slices"
 )
 
@@ -145,8 +145,92 @@ func Process(p Pkt, ghost m *sync.Mutex, ghost y SharedArg, ghost dp io.DataPlan
 
     //inbound
     ghost if(pkt.IO_val_Pkt2_1 != none[io.IO_ifs]) {
+        //enter
+        ghost m.Lock()
+        unfold SharedInv!< dp, y !>()
+
+        t, s := *y.Place, *y.State
+
+        ApplyElemWitness(s.ibuf, y.IBufY, pkt.IO_val_Pkt2_1, pkt.IO_val_Pkt2_2)
+	    assert pkt.IO_val_Pkt2_2 in AsSet(s.ibuf[pkt.IO_val_Pkt2_1])
+
+        ghost currseg := pkt.IO_val_Pkt2_2.CurrSeg
+        assume len(currseg.Future) > 0 //should be trivial to proof
+
+        ghost hf1, fut := currseg.Future[0], currseg.Future[1:]
+
+        //local
+        ghost local := true
+        if (local) {
+            assert pkt.IO_val_Pkt2_1 != none[io.IO_ifs]
+            ghost traversedseg := io.establishGuardTraversedseg(currseg)
+            ghost pkt_internal := io.IO_val(io.IO_Internal_val1{ 
+                pkt.IO_val_Pkt2_2, 
+                get(pkt.IO_val_Pkt2_1),
+                io.IO_pkt2(
+					io.IO_Packet2{
+						traversedseg,
+						pkt.IO_val_Pkt2_2.LeftSeg,
+						pkt.IO_val_Pkt2_2.MidSeg,
+						pkt.IO_val_Pkt2_2.RightSeg}),
+                none[io.IO_ifs]})
+
+            assume dp.dp2_check_interface(currseg.ConsDir, dp.Asid(), hf1, get(pkt.IO_val_Pkt2_1)) // will be removed
+            assume hf1.extr_asid() == dp.Asid()
+		    assume dp.hf_valid(currseg.ConsDir, currseg.AInfo, traversedseg.UInfo, hf1) //should be true by construction
+
+            assert dp.dp2_enter_guard(pkt_internal.IO_Internal_val1_1, currseg, traversedseg, dp.Asid(), hf1, pkt_internal.IO_Internal_val1_2, fut)
+            assert dp.dp3s_iospec_bio3s_enter_guard(s, t, pkt_internal)
+            unfold dp.dp3s_iospec_ordered(s, t)
+            unfold dp.dp3s_iospec_bio3s_enter(s, t)
+
+            tN := io.CBio_IN_bio3s_enter_T(t, pkt_internal)
+            io.Enter(t, pkt_internal) //Event
+
+            newPkt = io.IO_val(io.IO_val_Pkt2{pkt_internal.IO_Internal_val1_4, pkt_internal.IO_Internal_val1_3})
+            UpdateElemWitness(s.obuf, y.OBufY, newPkt.IO_val_Pkt2_1, newPkt.IO_val_Pkt2_2)
+            
+            ghost *y.State = io.dp3s_add_obuf(s, newPkt.IO_val_Pkt2_1, newPkt.IO_val_Pkt2_2)
+            ghost *y.Place = tN
+            
+            fold SharedInv!< dp, y !>()
+            ghost m.Unlock()
+        } else {
+            assume false
+        }
+
+        /*
+        m.CurrSeg == currseg &&
+		currseg.Future == seq[IO_HF]{hf1} ++ fut &&
+		dp.dp2_check_interface(currseg.ConsDir, asid, hf1, recvif) &&
+		update_uinfo(!currseg.ConsDir, currseg, traversedseg, hf1) &&
+		same_segment2(currseg, traversedseg) &&
+		same_other2(currseg, traversedseg) &&
+		dp.hf_valid(currseg.ConsDir, currseg.AInfo, traversedseg.UInfo, hf1) &&
+		hf1.extr_asid() == asid
+        */
+    
+
+        //assert dp.dp3s_iospec_bio3s_exit_guard(s, t, pkt_internal)
+        /*unfold dp.dp3s_iospec_ordered(s, t)
+	    unfold dp.dp3s_iospec_bio3s_exit(s, t)
+
+        tN := io.dp3s_iospec_bio3s_exit_T(t, pkt_internal)
+        io.Exit(t, pkt_internal) //Event
+
+        newPkt = io.IO_val(io.IO_val_Pkt2{some(pkt_internal.IO_Internal_val2_3), pkt_internal.IO_Internal_val2_2})
+        UpdateElemWitness(s.obuf, y.OBufY, newPkt.IO_val_Pkt2_1, newPkt.IO_val_Pkt2_2)
+        
+        ghost *y.State = io.dp3s_add_obuf(s, newPkt.IO_val_Pkt2_1, newPkt.IO_val_Pkt2_2)
+	    ghost *y.Place = tN
+        
+        fold SharedInv!< dp, y !>()
+        ghost m.Unlock()*/
+
+
         assume false
     } else {
+        assume false
         //exit
     
         ghost m.Lock()
