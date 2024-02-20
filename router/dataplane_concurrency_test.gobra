@@ -204,7 +204,20 @@ func Process(p Pkt, ghost m *sync.Mutex, ghost y SharedArg, ghost dp io.DataPlan
                     assume false
                 } else {
                     assume currseg.LeftSeg != none[io.IO_seg2] && len(get(currseg.LeftSeg)) > 0 // have to prove
-    
+                    ghost nextseg := get(currseg.LeftSeg)
+                    ghost traversedseg_inc := io.establishGuardTraversedsegInc(currseg, currseg.ConsDir)
+                    ghost hf2 := nextseg.Future[0]
+                    ghost pkt_internal := io.IO_val(io.IO_Internal_val1{ 
+                        pkt.IO_val_Pkt2_2, 
+                        get(pkt.IO_val_Pkt2_1),
+                        io.IO_pkt2(
+                            io.IO_Packet2{
+                                nextseg,
+                                pkt.IO_val_Pkt2_2.MidSeg,
+                                pkt.IO_val_Pkt2_2.RightSeg,
+                                some(traversedseg_inc)}),
+                        nextif_opt})
+                    assert dp.dp2_xover_common_guard(pkt.IO_val_Pkt2_2, currseg, nextseg, traversedseg_inc, pkt_internal.Internal_val1_3, hf1, hf2, dp.Asid(), pkt.IO_val_Pkt2_1)
                 }
             } else{
                 //enter
