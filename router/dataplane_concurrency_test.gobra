@@ -203,10 +203,16 @@ func Process(p Pkt, ghost m *sync.Mutex, ghost y SharedArg, ghost dp io.DataPlan
                 if(dp.Asid() in dp.Core()){
                     assume false
                 } else {
-                    assume currseg.LeftSeg != none[io.IO_seg2] && len(get(currseg.LeftSeg)) > 0 // have to prove
-                    ghost nextseg := get(currseg.LeftSeg)
-                    ghost traversedseg_inc := io.establishGuardTraversedsegInc(currseg, currseg.ConsDir)
+                    
+                    assume pkt.IO_val_Pkt2_2.LeftSeg != none[io.IO_seg2] // have to prove
+                    ghost nextseg := get(pkt.IO_val_Pkt2_2.LeftSeg)
+                    assume len(nextseg.Future) > 0 // have to prove
+                    assume !currseg.ConsDir && nextseg.ConsDir //deal with later
+                    assume nextseg.History == seq[io.IO_ahi]{} //true by construction
+                    assume currseg.Future == seq[io.IO_HF]{hf1} // have to prove
+                    ghost traversedseg_inc := io.establishGuardTraversedsegInc(currseg, !currseg.ConsDir)
                     ghost hf2 := nextseg.Future[0]
+                    assume hf2.extr_asid() == dp.Asid() // prove
                     ghost pkt_internal := io.IO_val(io.IO_Internal_val1{ 
                         pkt.IO_val_Pkt2_2, 
                         get(pkt.IO_val_Pkt2_1),
@@ -217,7 +223,45 @@ func Process(p Pkt, ghost m *sync.Mutex, ghost y SharedArg, ghost dp io.DataPlan
                                 pkt.IO_val_Pkt2_2.RightSeg,
                                 some(traversedseg_inc)}),
                         nextif_opt})
-                    assert dp.dp2_xover_common_guard(pkt.IO_val_Pkt2_2, currseg, nextseg, traversedseg_inc, pkt_internal.Internal_val1_3, hf1, hf2, dp.Asid(), pkt.IO_val_Pkt2_1)
+                    // pure func (dp DataPlaneSpec) dp2_xover_common_guard(m IO_pkt2,
+                    //     currseg IO_seg2,
+                    //     nextseg IO_seg2,
+                    //     traversedseg IO_seg2,
+                    //     newpkt IO_pkt2,
+                    //     hf1 IO_HF,
+                    //     hf2 IO_HF,
+                    //     asid IO_as,
+                    //     recvif IO_ifs) bool {
+                    //         return m.CurrSeg == currseg &&
+                    //             m.LeftSeg == some(nextseg) &&
+                    //             nextseg.History == seq[IO_ahi]{} &&
+                    //             newpkt == IO_pkt2(IO_Packet2{nextseg, m.MidSeg, m.RightSeg, some(traversedseg)}) &&
+                    //             currseg.Future == seq[IO_HF]{hf1} &&
+                    //             len(nextseg.Future) > 0 &&
+                    //             nextseg.Future[0] == hf2 &&
+                    //             dp.dp2_check_interface(currseg.ConsDir, asid, hf1, recvif) &&
+                    //             dp.dp2_check_recvif(currseg.ConsDir, asid, recvif) &&
+                    //             update_uinfo(!currseg.ConsDir, currseg, traversedseg, hf1) &&
+                    //             inc_seg2(currseg, traversedseg, hf1, seq[IO_HF]{}) &&
+                    //             dp.hf_valid(currseg.ConsDir, currseg.AInfo, traversedseg.UInfo, hf1) &&
+                    //             dp.hf_valid(nextseg.ConsDir, nextseg.AInfo, nextseg.UInfo, hf2) &&
+                    //             hf1.extr_asid() == asid &&
+                    //             hf2.extr_asid() == asid &&
+                    //             same_other2(currseg, traversedseg)
+                    // }
+
+                    assume dp.hf_valid(currseg.ConsDir, currseg.AInfo, traversedseg_inc.UInfo, hf1)
+                    assume dp.hf_valid(nextseg.ConsDir, nextseg.AInfo, nextseg.UInfo, hf2)
+                    assume dp.dp2_check_recvif(currseg.ConsDir, dp.Asid(), get(pkt.IO_val_Pkt2_1)) //to proof
+                    assert dp.dp2_check_interface(currseg.ConsDir, dp.Asid(), hf1, get(pkt.IO_val_Pkt2_1))
+                    
+                    assert io.inc_seg2(currseg, traversedseg_inc, hf1, seq[io.IO_HF]{})
+                    assert io.update_uinfo(!currseg.ConsDir, currseg, traversedseg_inc, hf1)
+                    assert hf1.extr_asid() == dp.Asid()
+                    assert hf2.extr_asid() == dp.Asid()
+                    assert io.same_other2(currseg, traversedseg_inc)
+                    assert dp.dp2_xover_common_guard(pkt.IO_val_Pkt2_2, currseg, nextseg, traversedseg_inc, pkt_internal.IO_Internal_val1_3, hf1, hf2, dp.Asid(), get(pkt.IO_val_Pkt2_1))
+                    assume false
                 }
             } else{
                 //enter
