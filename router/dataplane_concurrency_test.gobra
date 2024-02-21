@@ -143,14 +143,6 @@ func Process(p Pkt, ghost m *sync.Mutex, ghost y SharedArg, ghost dp io.DataPlan
    // ghost ingressID := pkt.IO_val_Pkt2_1
     assume pkt.isIO_val_Pkt2 //deal with later
 
-    ghost m.Lock()
-    unfold SharedInv!< dp, y !>()
-
-    t, s := *y.Place, *y.State
-
-    ApplyElemWitness(s.ibuf, y.IBufY, pkt.IO_val_Pkt2_1, pkt.IO_val_Pkt2_2)
-    assert pkt.IO_val_Pkt2_2 in AsSet(s.ibuf[pkt.IO_val_Pkt2_1])
-
     ghost currseg := pkt.IO_val_Pkt2_2.CurrSeg
     assume len(currseg.Future) > 0 // true by construction
 
@@ -181,7 +173,16 @@ func Process(p Pkt, ghost m *sync.Mutex, ghost y SharedArg, ghost dp io.DataPlan
 		    assume dp.hf_valid(currseg.ConsDir, currseg.AInfo, traversedseg.UInfo, hf1) //not clear at the moment
 
             assert dp.dp2_enter_guard(pkt_internal.IO_Internal_val1_1, currseg, traversedseg, dp.Asid(), hf1, pkt_internal.IO_Internal_val1_2, fut)
+            
+            ghost m.Lock()
+            unfold SharedInv!< dp, y !>()
+
+            t, s := *y.Place, *y.State
+
+            ApplyElemWitness(s.ibuf, y.IBufY, pkt.IO_val_Pkt2_1, pkt.IO_val_Pkt2_2)
+            assert pkt.IO_val_Pkt2_2 in AsSet(s.ibuf[pkt.IO_val_Pkt2_1])
             assert dp.dp3s_iospec_bio3s_enter_guard(s, t, pkt_internal)
+            
             unfold dp.dp3s_iospec_ordered(s, t)
             unfold dp.dp3s_iospec_bio3s_enter(s, t)
 
@@ -200,68 +201,102 @@ func Process(p Pkt, ghost m *sync.Mutex, ghost y SharedArg, ghost dp io.DataPlan
             // Outbound
             if (len(currseg.History) == 0) {
                 //xover
-                if(dp.Asid() in dp.Core()){
-                    assume false
-                } else {
+                assume pkt.IO_val_Pkt2_2.LeftSeg != none[io.IO_seg2] // have to prove
+                ghost nextseg := get(pkt.IO_val_Pkt2_2.LeftSeg)
+                assume len(nextseg.Future) > 1 // have to prove
+                
+                assume nextseg.History == seq[io.IO_ahi]{} //true by construction
+                assume currseg.Future == seq[io.IO_HF]{hf1} // have to prove
+                
+                ghost traversedseg_inc_curr := io.establishGuardTraversedsegInc(currseg, !currseg.ConsDir)
+                ghost traversedseg_inc_next := io.establishGuardTraversedsegInc(nextseg, nextseg.ConsDir) //len(traversedseg_inc_next) > 0
+
+                //next interface
+                ghost hf2 := nextseg.Future[0]
+                ghost nextif_opt := nextseg.ConsDir ? hf2.EgIF2 : hf2.InIF2 
+                assume hf2.extr_asid() == dp.Asid() // prove
+                ghost pkt_intermediate := io.IO_pkt2(
+                    io.IO_Packet2{
+                            nextseg,
+                            pkt.IO_val_Pkt2_2.MidSeg,
+                            pkt.IO_val_Pkt2_2.RightSeg,
+                            some(traversedseg_inc_curr)})
                     
-                    assume pkt.IO_val_Pkt2_2.LeftSeg != none[io.IO_seg2] // have to prove
-                    ghost nextseg := get(pkt.IO_val_Pkt2_2.LeftSeg)
-                    assume len(nextseg.Future) > 0 // have to prove
-                    assume !currseg.ConsDir && nextseg.ConsDir //deal with later
-                    assume nextseg.History == seq[io.IO_ahi]{} //true by construction
-                    assume currseg.Future == seq[io.IO_HF]{hf1} // have to prove
-                    ghost traversedseg_inc := io.establishGuardTraversedsegInc(currseg, !currseg.ConsDir)
-                    ghost hf2 := nextseg.Future[0]
-                    assume hf2.extr_asid() == dp.Asid() // prove
-                    ghost pkt_internal := io.IO_val(io.IO_Internal_val1{ 
+                     ghost pkt_internal := io.IO_val(io.IO_Internal_val1{ 
                         pkt.IO_val_Pkt2_2, 
                         get(pkt.IO_val_Pkt2_1),
-                        io.IO_pkt2(
-                            io.IO_Packet2{
-                                nextseg,
-                                pkt.IO_val_Pkt2_2.MidSeg,
-                                pkt.IO_val_Pkt2_2.RightSeg,
-                                some(traversedseg_inc)}),
+                        io.IO_Packet2{
+                            traversedseg_inc_next,
+                            pkt.IO_val_Pkt2_2.MidSeg,
+                            pkt.IO_val_Pkt2_2.RightSeg,
+                            some(traversedseg_inc_curr)},
                         nextif_opt})
-                    // pure func (dp DataPlaneSpec) dp2_xover_common_guard(m IO_pkt2,
-                    //     currseg IO_seg2,
-                    //     nextseg IO_seg2,
-                    //     traversedseg IO_seg2,
-                    //     newpkt IO_pkt2,
-                    //     hf1 IO_HF,
-                    //     hf2 IO_HF,
-                    //     asid IO_as,
-                    //     recvif IO_ifs) bool {
-                    //         return m.CurrSeg == currseg &&
-                    //             m.LeftSeg == some(nextseg) &&
-                    //             nextseg.History == seq[IO_ahi]{} &&
-                    //             newpkt == IO_pkt2(IO_Packet2{nextseg, m.MidSeg, m.RightSeg, some(traversedseg)}) &&
-                    //             currseg.Future == seq[IO_HF]{hf1} &&
-                    //             len(nextseg.Future) > 0 &&
-                    //             nextseg.Future[0] == hf2 &&
-                    //             dp.dp2_check_interface(currseg.ConsDir, asid, hf1, recvif) &&
-                    //             dp.dp2_check_recvif(currseg.ConsDir, asid, recvif) &&
-                    //             update_uinfo(!currseg.ConsDir, currseg, traversedseg, hf1) &&
-                    //             inc_seg2(currseg, traversedseg, hf1, seq[IO_HF]{}) &&
-                    //             dp.hf_valid(currseg.ConsDir, currseg.AInfo, traversedseg.UInfo, hf1) &&
-                    //             dp.hf_valid(nextseg.ConsDir, nextseg.AInfo, nextseg.UInfo, hf2) &&
-                    //             hf1.extr_asid() == asid &&
-                    //             hf2.extr_asid() == asid &&
-                    //             same_other2(currseg, traversedseg)
-                    // }
 
-                    assume dp.hf_valid(currseg.ConsDir, currseg.AInfo, traversedseg_inc.UInfo, hf1)
-                    assume dp.hf_valid(nextseg.ConsDir, nextseg.AInfo, nextseg.UInfo, hf2)
+                    assume dp.hf_valid(currseg.ConsDir, currseg.AInfo, traversedseg_inc_curr.UInfo, hf1)
+                    assume dp.hf_valid(nextseg.ConsDir, nextseg.AInfo, nextseg.UInfo, hf2) //not clear at the moment
                     assume dp.dp2_check_recvif(currseg.ConsDir, dp.Asid(), get(pkt.IO_val_Pkt2_1)) //to proof
-                    assert dp.dp2_check_interface(currseg.ConsDir, dp.Asid(), hf1, get(pkt.IO_val_Pkt2_1))
+                    //assert dp.dp2_xover_common_guard(pkt.IO_val_Pkt2_2, currseg, nextseg, traversedseg_inc_curr, pkt_intermediate, hf1, hf2, dp.Asid(), get(pkt.IO_val_Pkt2_1))
+                    assume dp.dp2_check_interface_top(nextseg.ConsDir, dp.Asid(), hf2) // must be proven
+
+                if(dp.Asid() in dp.Core()){
+                    assume dp.xover_core2_link_type(hf1, hf2, dp.Asid(), currseg.ConsDir)
+                    assume currseg.ConsDir == nextseg.ConsDir //deal with later
+                    assert nextif_opt != none[io.IO_ifs]
+                    assume get(nextif_opt) in domain(dp.GetNeighborIAs()) // must be proven
+
+                    ghost m.Lock()
+                    unfold SharedInv!< dp, y !>()
+
+                    t, s := *y.Place, *y.State
+
+                    ApplyElemWitness(s.ibuf, y.IBufY, pkt.IO_val_Pkt2_1, pkt.IO_val_Pkt2_2)
+                    assert pkt.IO_val_Pkt2_2 in AsSet(s.ibuf[pkt.IO_val_Pkt2_1])
+
+                    assert dp.dp3s_iospec_bio3s_xover_core_guard(s, t, pkt_internal)
+                    unfold dp.dp3s_iospec_ordered(s, t)
+                    unfold dp.dp3s_iospec_bio3s_xover_core(s, t)
+
+                    tN := io.dp3s_iospec_bio3s_xover_core_T(t, pkt_internal)
+                    io.Xover_core(t, pkt_internal) //Event
+
+                    newPkt = io.IO_val(io.IO_val_Pkt2{pkt_internal.IO_Internal_val1_4, pkt_internal.IO_Internal_val1_3})
+                    UpdateElemWitness(s.obuf, y.OBufY, newPkt.IO_val_Pkt2_1, newPkt.IO_val_Pkt2_2)
                     
-                    assert io.inc_seg2(currseg, traversedseg_inc, hf1, seq[io.IO_HF]{})
-                    assert io.update_uinfo(!currseg.ConsDir, currseg, traversedseg_inc, hf1)
-                    assert hf1.extr_asid() == dp.Asid()
-                    assert hf2.extr_asid() == dp.Asid()
-                    assert io.same_other2(currseg, traversedseg_inc)
-                    assert dp.dp2_xover_common_guard(pkt.IO_val_Pkt2_2, currseg, nextseg, traversedseg_inc, pkt_internal.IO_Internal_val1_3, hf1, hf2, dp.Asid(), get(pkt.IO_val_Pkt2_1))
-                    assume false
+                    ghost *y.State = io.dp3s_add_obuf(s, newPkt.IO_val_Pkt2_1, newPkt.IO_val_Pkt2_2)
+                    ghost *y.Place = tN
+                    
+                    fold SharedInv!< dp, y !>()
+                    ghost m.Unlock()
+                } else {
+                    assume !currseg.ConsDir && nextseg.ConsDir //deal with later
+                    assume dp.xover_up2down2_link_type(dp.Asid(), hf1, hf2)
+                    assert nextif_opt != none[io.IO_ifs]
+                    assume get(nextif_opt) in domain(dp.GetNeighborIAs()) // must be proven
+
+                    ghost m.Lock()
+                    unfold SharedInv!< dp, y !>()
+
+                    t, s := *y.Place, *y.State
+
+                    ApplyElemWitness(s.ibuf, y.IBufY, pkt.IO_val_Pkt2_1, pkt.IO_val_Pkt2_2)
+                    assert pkt.IO_val_Pkt2_2 in AsSet(s.ibuf[pkt.IO_val_Pkt2_1])
+
+
+                    assert dp.dp3s_iospec_bio3s_xover_up2down_guard(s, t, pkt_internal)
+                    unfold dp.dp3s_iospec_ordered(s, t)
+                    unfold dp.dp3s_iospec_bio3s_xover_up2down(s, t)
+
+                    tN := io.dp3s_iospec_bio3s_xover_up2down_T(t, pkt_internal)
+                    io.Xover_up2down(t, pkt_internal) //Event
+
+                    newPkt = io.IO_val(io.IO_val_Pkt2{pkt_internal.IO_Internal_val1_4, pkt_internal.IO_Internal_val1_3})
+                    UpdateElemWitness(s.obuf, y.OBufY, newPkt.IO_val_Pkt2_1, newPkt.IO_val_Pkt2_2)
+                    
+                    ghost *y.State = io.dp3s_add_obuf(s, newPkt.IO_val_Pkt2_1, newPkt.IO_val_Pkt2_2)
+                    ghost *y.Place = tN
+                    
+                    fold SharedInv!< dp, y !>()
+                    ghost m.Unlock()
                 }
             } else{
                 //enter
@@ -285,6 +320,16 @@ func Process(p Pkt, ghost m *sync.Mutex, ghost y SharedArg, ghost dp io.DataPlan
                     nextif_opt})
                 assume dp.dp2_check_interface_top(currseg.ConsDir, dp.Asid(), hf1) // must be proven
                 assume dp.hf_valid(currseg.ConsDir, currseg.AInfo, traversedseg_in.UInfo, hf1) //not clear at the moment
+
+
+                ghost m.Lock()
+                unfold SharedInv!< dp, y !>()
+
+                t, s := *y.Place, *y.State
+
+                ApplyElemWitness(s.ibuf, y.IBufY, pkt.IO_val_Pkt2_1, pkt.IO_val_Pkt2_2)
+                assert pkt.IO_val_Pkt2_2 in AsSet(s.ibuf[pkt.IO_val_Pkt2_1])
+
                 assert dp.dp3s_iospec_bio3s_enter_guard(s, t, pkt_internal)
                 unfold dp.dp3s_iospec_ordered(s, t)
                 unfold dp.dp3s_iospec_bio3s_enter(s, t)
@@ -318,6 +363,17 @@ func Process(p Pkt, ghost m *sync.Mutex, ghost y SharedArg, ghost dp io.DataPlan
 
         assume dp.dp2_check_interface_top(currseg.ConsDir, dp.Asid(), hf1) // must be proven
         assume dp.hf_valid(currseg.ConsDir, currseg.AInfo, currseg.UInfo, hf1) //not clear at the moment
+
+
+        ghost m.Lock()
+        unfold SharedInv!< dp, y !>()
+
+        t, s := *y.Place, *y.State
+
+        ApplyElemWitness(s.ibuf, y.IBufY, pkt.IO_val_Pkt2_1, pkt.IO_val_Pkt2_2)
+        assert pkt.IO_val_Pkt2_2 in AsSet(s.ibuf[pkt.IO_val_Pkt2_1])
+
+
         assert dp.dp3s_iospec_bio3s_exit_guard(s, t, pkt_internal)
 
         unfold dp.dp3s_iospec_ordered(s, t)
@@ -336,333 +392,38 @@ func Process(p Pkt, ghost m *sync.Mutex, ghost y SharedArg, ghost dp io.DataPlan
         ghost m.Unlock()
         
     }
-    //inbound
-
-    //outbound
-
-
-
-    //ghost newpkt, egressID := check(p)
-    //assume pkt.IO_val_Pkt2_1 == ID(ingressID)
-    //Inbound
-    //enter
 }
+
+
+/** ATOMIC BIO operations **/
 /*
-    ghost if ID(ingressID) != none[io.IO_ifs] { //we have to proof this 
-        ghost pkt_internal := io.IO_Pkt2ToIO_Internal_val1(pkt)
-        assert pkt_internal.IO_Internal_val1_2 == io.IO_ifs(ingressID)
-        isXover := false //remove
+requires dp.Valid()
+requires v.isIO_Internal_val1
+requires ElemWitness(y.IBufY, some(v.IO_Internal_val1_2), v.IO_Internal_val1_1)
+preserves acc(m.LockP(), _) && m.LockInv() == SharedInv!< dp, y !>;
+ensures  ElemWitness(y.OBufY, v.IO_Internal_val1_4, v.IO_Internal_val1_3)
+func AtomicEnter(v io.IO_val, m *sync.Mutex, y SharedArg, dp io.DataPlaneSpec){
+    ghost m.Lock()
+    unfold SharedInv!< dp, y !>()
 
-        assume len(pkt_internal.IO_Internal_val1_1.CurrSeg.Future) > 0 //true by construction
+    t, s := *y.Place, *y.State
 
-        //updateNonConsDirIngressSegID
-        //needed for io.dp3s_forward( ... )
-        assume !pkt_internal.IO_Internal_val1_1.CurrSeg.ConsDir ==> pkt_internal.IO_Internal_val1_3.CurrSeg.UInfo == io.upd_uinfo(pkt_internal.IO_Internal_val1_1.CurrSeg.UInfo, pkt_internal.IO_Internal_val1_1.CurrSeg.Future[0])
+    ApplyElemWitness(s.ibuf, y.IBufY, some(v.IO_Internal_val1_2), v.IO_Internal_val1_1)
+    //assert pkt.IO_val_Pkt2_2 in AsSet(s.ibuf[pkt.IO_val_Pkt2_1])
 
-       if isXover {
-        //Xover
-        //pkt_internal := IO_Pkt2ToIO_Internal_val2(pkt)
-        //isXover
-        assume pkt.IO_val_Pkt2_2.LeftSeg != none[io.IO_seg2]
-        if pkt.IO_val_Pkt2_2.CurrSeg.ConsDir == get(pkt.IO_val_Pkt2_2.LeftSeg).ConsDir {
-            //core
-            ghost m.Lock()
-            unfold SharedInv!< y !>()
+    assert dp.dp3s_iospec_bio3s_enter_guard(s, t, v)
+    unfold dp.dp3s_iospec_ordered(s, t)
+    unfold dp.dp3s_iospec_bio3s_enter(s, t)
 
-            t, s := *y.Place, *y.State
+    tN := io.CBio_IN_bio3s_enter_T(t, v)
+    io.Enter(t, v) //Event
 
-            ApplyElemWitness(s.ibuf, y.IBufY, ID(ingressID), pkt.IO_val_Pkt2_2)
-            assert pkt.IO_val_Pkt2_2 in AsSet(s.ibuf[ID(ingressID)])
-
-            ghost v:= pkt_internal
-            
-            unfold io.dp3s_iospec_ordered(s, t)
-	        unfold io.dp3s_iospec_bio3s_xover_core(s, t)
-            assume io.asid() in io.core_as_set() //Check if core router
-            
-            currseg := v.IO_Internal_val1_1.CurrSeg
-            nextseg := get(v.IO_Internal_val1_1.LeftSeg)
-            assume len(nextseg.Future) > 0 //true by construction
-            assume len(currseg.Future) > 0 //true by construction
-            
-            hf1, hf2 := currseg.Future[0], nextseg.Future[0]
-            assume nextseg.History == seq[io.IO_ahi]{} //true by construction
-            assume currseg.Future == seq[io.IO_HF]{hf1} //true by construction
-            traversedseg := io.dp3s_iospec_bio3s_create_guard_traversedseg_inc(currseg)
-
-            
-            assert currseg.ConsDir == nextseg.ConsDir
-
-            assume io.xover_core2_link_type(hf1, hf2, io.asid(), currseg.ConsDir) //simple
-           
-            //assume io.dp2_in_ext(s, io.asid(), v.Internal_val1_2, v.Internal_val1_1)
-            
-            assert some(v.IO_Internal_val1_2) in domain(s.ibuf)
-
-            //validateIngressID
-            assume currseg.ConsDir ==> hf1.InIF2 === some(v.IO_Internal_val1_2) 
-            assume !currseg.ConsDir ==> hf1.EgIF2 === some(v.IO_Internal_val1_2)
-
-            assume io.valid_link_types_in2(hf1, io.asid()) //true by construction
-            assume io.valid_link_types2(hf1, io.asid()) //true by construction
-            assert io.dp2_check_interface(currseg.ConsDir, io.asid(), hf1, v.IO_Internal_val1_2)
-            assume io.dp2_check_recvif(currseg.ConsDir, io.asid(), v.IO_Internal_val1_2) //simple
-
-            //verifyCurrentMAC()
-            assume io.hf_valid(currseg.ConsDir, currseg.AInfo, traversedseg.UInfo, hf1)
-            assume io.hf_valid(nextseg.ConsDir, nextseg.AInfo, nextseg.UInfo, hf2)
-            assume hf1.extr_asid() == io.asid() && hf2.extr_asid() == io.asid()
-
-            assert v.IO_Internal_val1_1.CurrSeg == currseg
-			assert v.IO_Internal_val1_1.LeftSeg == some(nextseg)
-			assert nextseg.History == seq[io.IO_ahi]{}
-			//assert traversedseg == io.IO_pkt2(io.IO_Packet2{nextseg, v.IO_Internal_val1_1.MidSeg, v.IO_Internal_val1_1.RightSeg, some(traversedseg)})
-			assert currseg.Future == seq[io.IO_HF]{hf1}
-			assert len(nextseg.Future) > 0 
-			assert nextseg.Future[0] == hf2
-			assert io.dp2_check_interface(currseg.ConsDir, io.asid(), hf1, v.IO_Internal_val1_2)
-			assert io.dp2_check_recvif(currseg.ConsDir, io.asid(), v.IO_Internal_val1_2)
-			assert io.update_uinfo(!currseg.ConsDir, currseg, traversedseg, hf1) 
-			assert io.inc_seg2(currseg, traversedseg, hf1, seq[io.IO_HF]{})
-			assert io.hf_valid(currseg.ConsDir, currseg.AInfo, traversedseg.UInfo, hf1)
-			assert io.hf_valid(nextseg.ConsDir, nextseg.AInfo, nextseg.UInfo, hf2)
-			assert hf1.extr_asid() == io.asid() 
-			assert hf2.extr_asid() == io.asid() 
-			assert io.same_other2(currseg, traversedseg)
-            assert io.dp3s_forward(
-                io.IO_pkt2(io.IO_Packet2{nextseg, v.IO_Internal_val1_1.MidSeg, v.IO_Internal_val1_1.RightSeg, some(traversedseg)}),
-                io.IO_pkt2(io.IO_Packet2{nextseg, v.IO_Internal_val1_1.MidSeg, v.IO_Internal_val1_1.RightSeg, some(traversedseg)}),
-                v.IO_Internal_val1_4)
-
-            pkt_internal := io.IO_val(io.IO_Internal_val1{
-                pkt_internal.IO_Internal_val1_1, 
-                pkt_internal.IO_Internal_val1_2, 
-                io.IO_pkt2(io.IO_Packet2{nextseg, v.IO_Internal_val1_1.MidSeg, v.IO_Internal_val1_1.RightSeg, some(traversedseg)}), 
-                pkt_internal.IO_Internal_val1_4, 
-            })
-            assert io.dp2_xover_common_guard(
-                v.IO_Internal_val1_1,
-                currseg,
-                nextseg, 
-                traversedseg, 
-                io.IO_pkt2(io.IO_Packet2{nextseg, v.IO_Internal_val1_1.MidSeg, v.IO_Internal_val1_1.RightSeg, some(traversedseg)}),
-                hf1, 
-                hf2, 
-                hf1.extr_asid(), 
-                v.IO_Internal_val1_2)
-
-            assert io.dp3s_iospec_bio3s_xover_core_guard(s, t, pkt_internal)
-
-            tN := io.dp3s_iospec_bio3s_xover_core_T(t, pkt_internal)
-            Xover_core(t, pkt_internal)
-
-            UpdateElemWitness(s.obuf, y.OBufY, pkt_internal.IO_Internal_val1_4, pkt_internal.IO_Internal_val1_3)
-            
-            ghost *y.State = io.dp3s_add_obuf(s, pkt_internal.IO_Internal_val1_4, pkt_internal.IO_Internal_val1_3)
-            ghost *y.Place = tN
-            
-            fold SharedInv!< y !>()
-            ghost m.Unlock()
-
-            
-        } else {
-            //up2down
-            ghost m.Lock()
-            unfold SharedInv!< y !>()
-
-            t, s := *y.Place, *y.State
-
-            ApplyElemWitness(s.ibuf, y.IBufY, ID(ingressID), pkt.IO_val_Pkt2_2)
-            assert pkt.IO_val_Pkt2_2 in AsSet(s.ibuf[ID(ingressID)])
-
-            ghost v:= pkt_internal
-            
-            unfold io.dp3s_iospec_ordered(s, t)
-	        unfold io.dp3s_iospec_bio3s_xover_up2down(s, t)
-            //assume io.asid() in io.core_as_set() //Check if core router
-            
-            currseg := v.IO_Internal_val1_1.CurrSeg
-            nextseg := get(v.IO_Internal_val1_1.LeftSeg)
-            assume len(nextseg.Future) > 0 //true by construction
-            assume len(currseg.Future) > 0 //true by construction
-            
-            hf1, hf2 := currseg.Future[0], nextseg.Future[0]
-            assume nextseg.History == seq[io.IO_ahi]{} //true by construction
-            assume currseg.Future == seq[io.IO_HF]{hf1} //true by construction
-            traversedseg := io.dp3s_iospec_bio3s_create_guard_traversedseg_inc(currseg)
-
-            
-            assume nextseg.ConsDir //we need to prove this
-
-            assume io.xover_up2down2_link_type(io.asid(), hf1, hf2) //simple
-           
-            //assume io.dp2_in_ext(s, io.asid(), v.Internal_val1_2, v.Internal_val1_1)
-            
-            assert some(v.IO_Internal_val1_2) in domain(s.ibuf)
-
-            //validateIngressID
-            assume currseg.ConsDir ==> hf1.InIF2 === some(v.IO_Internal_val1_2) 
-            assume !currseg.ConsDir ==> hf1.EgIF2 === some(v.IO_Internal_val1_2)
-
-            assume io.valid_link_types_in2(hf1, io.asid()) //true by construction
-            assume io.valid_link_types2(hf1, io.asid()) //true by construction
-            assert io.dp2_check_interface(currseg.ConsDir, io.asid(), hf1, v.IO_Internal_val1_2)
-            assume io.dp2_check_recvif(currseg.ConsDir, io.asid(), v.IO_Internal_val1_2) //simple
-
-            //verifyCurrentMAC()
-            assume io.hf_valid(currseg.ConsDir, currseg.AInfo, traversedseg.UInfo, hf1)
-            assume io.hf_valid(nextseg.ConsDir, nextseg.AInfo, nextseg.UInfo, hf2)
-            assume hf1.extr_asid() == io.asid() && hf2.extr_asid() == io.asid()
-
-            assert v.IO_Internal_val1_1.CurrSeg == currseg
-			assert v.IO_Internal_val1_1.LeftSeg == some(nextseg)
-			assert nextseg.History == seq[io.IO_ahi]{}
-			//assert traversedseg == io.IO_pkt2(io.IO_Packet2{nextseg, v.IO_Internal_val1_1.MidSeg, v.IO_Internal_val1_1.RightSeg, some(traversedseg)})
-			assert currseg.Future == seq[io.IO_HF]{hf1}
-			assert len(nextseg.Future) > 0 
-			assert nextseg.Future[0] == hf2
-			assert io.dp2_check_interface(currseg.ConsDir, io.asid(), hf1, v.IO_Internal_val1_2)
-			assert io.dp2_check_recvif(currseg.ConsDir, io.asid(), v.IO_Internal_val1_2)
-			assert io.update_uinfo(!currseg.ConsDir, currseg, traversedseg, hf1) 
-			assert io.inc_seg2(currseg, traversedseg, hf1, seq[io.IO_HF]{})
-			assert io.hf_valid(currseg.ConsDir, currseg.AInfo, traversedseg.UInfo, hf1)
-			assert io.hf_valid(nextseg.ConsDir, nextseg.AInfo, nextseg.UInfo, hf2)
-			assert hf1.extr_asid() == io.asid() 
-			assert hf2.extr_asid() == io.asid() 
-			assert io.same_other2(currseg, traversedseg)
-            assert io.dp3s_forward(
-                io.IO_pkt2(io.IO_Packet2{nextseg, v.IO_Internal_val1_1.MidSeg, v.IO_Internal_val1_1.RightSeg, some(traversedseg)}),
-                io.IO_pkt2(io.IO_Packet2{nextseg, v.IO_Internal_val1_1.MidSeg, v.IO_Internal_val1_1.RightSeg, some(traversedseg)}),
-                v.IO_Internal_val1_4)
-
-            pkt_internal := io.IO_val(io.IO_Internal_val1{
-                pkt_internal.IO_Internal_val1_1, 
-                pkt_internal.IO_Internal_val1_2, 
-                io.IO_pkt2(io.IO_Packet2{nextseg, v.IO_Internal_val1_1.MidSeg, v.IO_Internal_val1_1.RightSeg, some(traversedseg)}), 
-                pkt_internal.IO_Internal_val1_4, 
-            })
-            assert io.dp2_xover_common_guard(
-                v.IO_Internal_val1_1,
-                currseg,
-                nextseg, 
-                traversedseg, 
-                io.IO_pkt2(io.IO_Packet2{nextseg, v.IO_Internal_val1_1.MidSeg, v.IO_Internal_val1_1.RightSeg, some(traversedseg)}),
-                hf1, 
-                hf2, 
-                hf1.extr_asid(), 
-                v.IO_Internal_val1_2)
-
-            assert io.dp3s_iospec_bio3s_xover_up2down_guard(s, t, pkt_internal)
-
-            tN := io.dp3s_iospec_bio3s_xover_up2down_T(t, pkt_internal)
-            Xover_up2down(t, pkt_internal)
-
-            UpdateElemWitness(s.obuf, y.OBufY, pkt_internal.IO_Internal_val1_4, pkt_internal.IO_Internal_val1_3)
-            
-            ghost *y.State = io.dp3s_add_obuf(s, pkt_internal.IO_Internal_val1_4, pkt_internal.IO_Internal_val1_3)
-            ghost *y.Place = tN
-            
-            fold SharedInv!< y !>()
-            ghost m.Unlock()
-        }
-
-       } else {
-        ghost m.Lock()
-        unfold SharedInv!< y !>()
-
-        t, s := *y.Place, *y.State
-
-        ApplyElemWitness(s.ibuf, y.IBufY, ID(ingressID), pkt_internal.IO_Internal_val1_1)
-	    assert  pkt_internal.IO_Internal_val1_1 in AsSet(s.ibuf[ID(ingressID)])
-
-        ghost v:= pkt_internal
-        assume len(v.IO_Internal_val1_1.CurrSeg.Future) > 0 //should be trivial to proof
-
-        
-
-
-        unfold io.dp3s_iospec_ordered(s, t)
-	    unfold io.dp3s_iospec_bio3s_enter(s, t)
-        assert some(pkt_internal.IO_Internal_val1_2) in domain(s.ibuf)
-        assert (let ibuf_set := s.ibuf[some(v.IO_Internal_val1_2)] in (v.IO_Internal_val1_1 in ibuf_set))
-        
-        ghost currseg := v.IO_Internal_val1_1.CurrSeg
-        ghost hf1, fut := currseg.Future[0], currseg.Future[1:]
-        ghost traversedseg := io.dp3s_iospec_bio3s_create_guard_traversedseg(currseg)
-        // assume io.dp2_enter_guard(
-		// 	v.IO_Internal_val1_1,
-		// 	currseg,
-		// 	traversedseg,
-		// 	io.asid(),
-		// 	hf1,
-		// 	v.IO_Internal_val1_2,
-		// 	fut)
-        assert v.IO_Internal_val1_1.CurrSeg == currseg
-        assert currseg.Future == seq[io.IO_HF]{hf1} ++ fut
-        assert io.update_uinfo(!currseg.ConsDir, currseg, traversedseg, hf1)
-        assert io.same_segment2(currseg, traversedseg)
-        assert io.same_other2(currseg, traversedseg)
-
-        //validateIngressID
-        assume currseg.ConsDir ==> hf1.InIF2 === some(v.IO_Internal_val1_2) 
-        assume !currseg.ConsDir ==> hf1.EgIF2 === some(v.IO_Internal_val1_2)
-
-
-        assume io.valid_link_types_in2(hf1, io.asid()) //true by construction
-        assume io.valid_link_types2(hf1, io.asid()) //true by construction
-        assert io.dp2_check_interface(currseg.ConsDir, io.asid(), hf1, v.IO_Internal_val1_2)
-        
-        //verifyCurrentMAC()
-        assume io.hf_valid(currseg.ConsDir, currseg.AInfo, traversedseg.UInfo, hf1)
-
-        assume hf1.extr_asid() == io.asid() //true by construction
-
-        assert io.dp3s_iospec_bio3s_enter_guard(s, t, pkt_internal)
-
-        tN := io.CBio_IN_bio3s_enter_T(t, pkt_internal)
-        Enter(t, pkt_internal)
-
-        UpdateElemWitness(s.obuf, y.OBufY, pkt_internal.IO_Internal_val1_4, pkt_internal.IO_Internal_val1_3)
-        
-        ghost *y.State = io.dp3s_add_obuf(s, pkt_internal.IO_Internal_val1_4, pkt_internal.IO_Internal_val1_3)
-	    ghost *y.Place = tN
-        
-        fold SharedInv!< y !>()
-        ghost m.Unlock()
-       }
-        
-
-        
-    } else {  //Outbound ------------------------------------------------------------
-        assert ID(ingressID) == none[io.IO_ifs]
-        pkt_internal := IO_Pkt2ToIO_Internal_val2(pkt)
-        //exit  
-        ghost m.Lock()
-        unfold SharedInv!< y !>()
-
-        t, s := *y.Place, *y.State
-
-        ApplyElemWitness(s.ibuf, y.IBufY, ID(ingressID), pkt_internal.IO_Internal_val2_1)
-	    assert pkt_internal.IO_Internal_val2_1 in AsSet(s.ibuf[ID(ingressID)])
-
-        //ghost v:= pkt_internal
-        //assume len(v.IO_Internal_val1_1.CurrSeg.Future) > 0 //should be trivial to proof
-
-        assert io.dp3s_iospec_bio3s_exit_guard(s, t, pkt_internal)
-
-
-        unfold io.dp3s_iospec_ordered(s, t)
-	    unfold io.dp3s_iospec_bio3s_exit(s, t)
-
-        tN := io.dp3s_iospec_bio3s_exit_T(t, pkt_internal)
-        Exit(t, pkt_internal)
-
-        UpdateElemWitness(s.obuf, y.OBufY, some(pkt_internal.IO_Internal_val2_3), pkt_internal.IO_Internal_val2_2)
-        
-        ghost *y.State = io.dp3s_add_obuf(s, some(pkt_internal.IO_Internal_val2_3), pkt_internal.IO_Internal_val2_2)
-	    ghost *y.Place = tN
-        
-        fold SharedInv!< y !>()
-        ghost m.Unlock()
-    }
-}*/
+    newPkt := io.IO_val(io.IO_val_Pkt2{v.IO_Internal_val1_4, v.IO_Internal_val1_3})
+    UpdateElemWitness(s.obuf, y.OBufY, newPkt.IO_val_Pkt2_1, newPkt.IO_val_Pkt2_2)
+    
+    ghost *y.State = io.dp3s_add_obuf(s, newPkt.IO_val_Pkt2_1, newPkt.IO_val_Pkt2_2)
+    ghost *y.Place = tN
+    
+    fold SharedInv!< dp, y !>()
+    ghost m.Unlock()
+} */
