@@ -610,7 +610,7 @@ pure func absIO_val(dp io.DataPlaneSpec, raw []byte, ingressID uint16) (val io.I
 		io.IO_val(io.IO_val_Pkt2{ifsToIO_ifs(ingressID), get(absPkt(dp, raw, dp.asid()))}) :
 		absIO_val_Unsupported(raw, ingressID)
 }
-
+/*
 ghost
 requires acc(&d.localIA, _)
 decreases
@@ -655,10 +655,4 @@ pure func (d *DataPlane) DpAgreesWithSpec(dp io.DataPlaneSpec) bool {
 		d.dpSpecWellConfiguredLocalIA(dp)     &&
 		d.dpSpecWellConfiguredNeighborIAs(dp) &&
 		d.dpSpecWellConfiguredLinkTypes(dp)
-}
-
-ghost
-decreases
-pure func ifsToIO_ifs(ifs uint16) option[io.IO_ifs]{
-    return ifs == 0 ? none[io.IO_ifs] : some(io.IO_ifs(ifs))
-}
+}*/

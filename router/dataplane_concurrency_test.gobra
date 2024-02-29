@@ -23,26 +23,29 @@ decreases
 requires Prophecy(prophecyM)
 requires io.token(t) && MultiReadBio(t, prophecyM)
 requires forall i int :: {&buf[i]} 0 <= i && i < len(buf) ==> acc(&buf[i])
-ensures  prophecyM == ioLock
-ensures  0 <= ioLock && ioLock <= len(buf) 
-ensures  io.token(old(MutliReadBioNext(t, ioLock))) && old(MutliReadBioCorrectIfs(t, ioLock, ifsToIO_ifs(c)))
+ensures  err != 0 ==> prophecyM == 0
+ensures  err == 0 ==> prophecyM == n
+ensures  err == 0 ==> 0 <= n && n <= len(buf) 
+ensures  io.token(old(MultiReadBioNext(t, prophecyM))) && old(MultiReadBioCorrectIfs(t, prophecyM, ifsToIO_ifs(c)))
 ensures  forall i int :: {&buf[i]} 0 <= i && i < len(buf) ==> acc(&buf[i])
-ensures  forall i int :: {buf[i]} 0 <= i && i < ioLock ==> acc(sl.AbsSlice_Bytes(buf[i], 0, len(buf[i])), _) && IO_val_Abs(buf[i]) == old(MutliReadBioIO_val(t, ioLock)[i])
-func BatchRecv(c uint16, buf []Pkt, ghost prophecyM int, ghost t io.Place) (ioLock int)
+ensures  err == 0 ==> forall i int :: {&buf[i]} 0 <= i && i < n ==> 
+    acc(sl.AbsSlice_Bytes(buf[i], 0, len(buf[i])), _) && IO_val_Abs(buf[i]) == old(MultiReadBioIO_val(t, n)[i])
+func BatchRecv(c uint16, buf []Pkt, ghost prophecyM int, ghost t io.Place) (n int, err int)
+
 
 //----------------------------------------------------------------------//
 
 requires dp.Valid()
-requires io.token(ub) && dp.dp3s_iospec_ordered(s, ub)
-func rc (ingressID uint16, ghost ub io.Place, ghost s io.IO_dp3s_state_local, ghost dp io.DataPlaneSpec) {
-  ghost ioLock, ioSharedArg := InitSharedInv(dp, ub, s)
+requires io.token(place) && dp.dp3s_iospec_ordered(s, place)
+func rc (ingressID uint16, ghost place io.Place, ghost s io.IO_dp3s_state_local, ghost dp io.DataPlaneSpec) {
+  ghost ioLock, ioSharedArg := InitSharedInv(dp, place, s)
   ghost from := ifsToIO_ifs(ingressID)
   buf := make([]Pkt, 1000)
 
+  invariant ifsToIO_ifs(ingressID) == from
   invariant acc(ioLock.LockP(), _) && ioLock.LockInv() == SharedInv!< dp, ioSharedArg !>;
   invariant forall i int :: {&buf[i]} 0 <= i && i < len(buf) ==> acc(&buf[i])
   for true {
-    ghost n := len(buf)
     // multi recv
     ghost ioLock.Lock()
     unfold SharedInv!< dp, ioSharedArg !>()
@@ -51,14 +54,15 @@ func rc (ingressID uint16, ghost ub io.Place, ghost s io.IO_dp3s_state_local, gh
     ghost numberOfReceivedPacketsProphecy := AllocProphecy() 
     ExtractMultiReadBio(dp, t, numberOfReceivedPacketsProphecy, s)
     MultiUpdateElemWitness(t, numberOfReceivedPacketsProphecy, from, s, ioSharedArg)
-    ghost es_val := MutliReadBioIO_val(t,numberOfReceivedPacketsProphecy)
+    ghost es_val := MultiReadBioIO_val(t,numberOfReceivedPacketsProphecy)
 
     ghost sN := MultiReadBioUpd(t, numberOfReceivedPacketsProphecy, s)
-    ghost tN := MutliReadBioNext(t, numberOfReceivedPacketsProphecy)
+    ghost tN := MultiReadBioNext(t, numberOfReceivedPacketsProphecy)
     assert dp.dp3s_iospec_ordered(sN, tN)
-    pkts := BatchRecv(ingressID, buf, numberOfReceivedPacketsProphecy, t)
-    
-    MultiElemWitnessConv(ioSharedArg.IBufY, from, es_val)
+    pkts, err := BatchRecv(ingressID, buf, numberOfReceivedPacketsProphecy, t)
+    //ghost if(pkts > 0){
+        MultiElemWitnessConv(ioSharedArg.IBufY, from, es_val)
+   // }
     //assert forall i int :: {es_val[i]} 0 <= i && i < pkts ==> PktMem(buf[i]) && IO_val_Abs(buf[i]) == es_val[i]
     //assert MultiElemWitness0(ioSharedArg.IBufY, from, es_val, 0)
 
@@ -68,22 +72,25 @@ func rc (ingressID uint16, ghost ub io.Place, ghost s io.IO_dp3s_state_local, gh
     fold SharedInv!< dp, ioSharedArg !>()
     ioLock.Unlock()
     //end of recv
+    if err != 0{
+        continue
+    }
     
     if pkts == 0{
-        return
+        continue
     }
-    ghost k := 0
 
+    invariant 0 <= i0 && i0 <= pkts
     invariant ifsToIO_ifs(ingressID) == from
     invariant acc(ioLock.LockP(), _) && ioLock.LockInv() == SharedInv!< dp, ioSharedArg !>;
     invariant forall i int :: {&buf[i]} 0 <= i && i < len(buf) ==> acc(&buf[i])
-    invariant forall i int :: {buf[i]} k <= i && i < pkts ==> acc(sl.AbsSlice_Bytes(buf[i], 0, len(buf[i])), _) && IO_val_Abs(buf[i]) == es_val[i]
-    invariant MultiElemWitnessWithIndex(ioSharedArg.IBufY, from, es_val, k)
-    decreases pkts - k
-    for _, ub := range buf[:pkts] with k {
-      unfold MultiElemWitnessWithIndex(ioSharedArg.IBufY, from, es_val, k)
+    invariant forall i int :: {&buf[i]} i0 <= i && i < pkts ==> acc(sl.AbsSlice_Bytes(buf[i], 0, len(buf[i])), _) && IO_val_Abs(buf[i]) == es_val[i]
+    invariant MultiElemWitnessWithIndex(ioSharedArg.IBufY, from, es_val, i0)
+    decreases pkts - i0
+    for i0 := 0; i0 < pkts; i0++ {
+      unfold MultiElemWitnessWithIndex(ioSharedArg.IBufY, from, es_val, i0)
       //assume IO_val_Abs(ub).isIO_val_Pkt2
-      ghost newAbsPkt := processPkt(ub, ingressID, ioLock, ioSharedArg, dp)
+      ghost newAbsPkt := processPkt(buf[i0], ingressID, ioLock, ioSharedArg, dp)
       assume newAbsPkt.isIO_val_Pkt2
 
       //send
