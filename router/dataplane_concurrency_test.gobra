@@ -85,6 +85,7 @@ func rc (ingressID uint16, ghost place io.Place, ghost s io.IO_dp3s_state_local,
     }
 
     invariant 0 <= i0 && i0 <= pkts
+    invariant i0 <= len(buf)
     invariant ifsToIO_ifs(ingressID) == from
     invariant acc(ioLock.LockP(), _) && ioLock.LockInv() == SharedInv!< dp, ioSharedArg !>;
     invariant forall i int :: {&buf[i]} 0 <= i && i < len(buf) ==> acc(&buf[i])
@@ -95,6 +96,8 @@ func rc (ingressID uint16, ghost place io.Place, ghost s io.IO_dp3s_state_local,
     for i0 := 0; i0 < pkts; i0++ {
       unfold MultiElemWitnessWithIndex(ioSharedArg.IBufY, from, es_val, i0)
       //assume IO_val_Abs(ub).isIO_val_Pkt2
+      assert acc(&buf[i0])
+      assert acc(sl.AbsSlice_Bytes(buf[i0], 0, len(buf[i0])), _)
       ghost newAbsPkt := processPkt(buf[i0], ingressID, ioLock, ioSharedArg, dp)
 
       //send
@@ -102,7 +105,7 @@ func rc (ingressID uint16, ghost place io.Place, ghost s io.IO_dp3s_state_local,
       unfold SharedInv!< dp, ioSharedArg !>()
 
       t, s := *ioSharedArg.Place, *ioSharedArg.State
-     ghost if(newAbsPkt.isIO_val_Pkt2) {
+      ghost if(newAbsPkt.isIO_val_Pkt2) {
       ApplyElemWitness(s.obuf, ioSharedArg.OBufY, newAbsPkt.IO_val_Pkt2_1, newAbsPkt.IO_val_Pkt2_2)
       assert newAbsPkt.IO_val_Pkt2_2 in AsSet(s.obuf[newAbsPkt.IO_val_Pkt2_1])
       assert dp.dp3s_iospec_bio3s_send_guard(s, t, newAbsPkt)
@@ -142,7 +145,7 @@ func processPkt(ub Pkt, ghost ingressID uint16, ghost ioLock *sync.Mutex, ghost 
     //assume newAbsPkt.isIO_val_Pkt2
     //AssumeElemWitness(ioSharedArg.OBufY, newAbsPkt.IO_val_Pkt2_1, newAbsPkt.IO_val_Pkt2_2)
   } else {
-    assume !newAbsPkt.isIO_val_Pkt2
+    assume newAbsPkt.isIO_val_Unsupported
   }
   return newAbsPkt
 }
@@ -261,7 +264,7 @@ func Process(ub Pkt, ghost ioLock *sync.Mutex, ghost ioSharedArg SharedArg, ghos
                     assert nextif_opt != none[io.IO_ifs]
                     assume get(nextif_opt) in domain(dp.GetNeighborIAs()) // must be proven
                     reveal dp.Valid()
-                    
+
                     ghost ioLock.Lock()
                     unfold SharedInv!< dp, ioSharedArg !>()
 
