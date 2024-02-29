@@ -33,6 +33,14 @@ ensures  err == 0 ==> forall i int :: {&buf[i]} 0 <= i && i < n ==>
 func BatchRecv(c uint16, buf []Pkt, ghost prophecyM int, ghost t io.Place) (n int, err int)
 
 
+ghost
+decreases
+requires io.token(place) && io.CBioIO_bio3s_send(place, ioAbsPkts)
+ensures  err != 0 ==> io.token(place) && io.CBioIO_bio3s_send(place, ioAbsPkts) && 
+    old(io.dp3s_iospec_bio3s_send_T(place, ioAbsPkts)) == io.dp3s_iospec_bio3s_send_T(place, ioAbsPkts)
+ensures  err == 0 ==> io.token(old(io.dp3s_iospec_bio3s_send_T(place, ioAbsPkts))) 
+func BatchSend(ghost place io.Place, ghost ioAbsPkts io.IO_val) (err int)
+
 //----------------------------------------------------------------------//
 
 requires dp.Valid()
@@ -60,15 +68,11 @@ func rc (ingressID uint16, ghost place io.Place, ghost s io.IO_dp3s_state_local,
     ghost tN := MultiReadBioNext(t, numberOfReceivedPacketsProphecy)
     assert dp.dp3s_iospec_ordered(sN, tN)
     pkts, err := BatchRecv(ingressID, buf, numberOfReceivedPacketsProphecy, t)
-    //ghost if(pkts > 0){
-        MultiElemWitnessConv(ioSharedArg.IBufY, from, es_val)
-   // }
-    //assert forall i int :: {es_val[i]} 0 <= i && i < pkts ==> PktMem(buf[i]) && IO_val_Abs(buf[i]) == es_val[i]
-    //assert MultiElemWitness0(ioSharedArg.IBufY, from, es_val, 0)
-
     ghost *ioSharedArg.State = sN
     ghost *ioSharedArg.Place = tN
-
+    MultiElemWitnessConv(ioSharedArg.IBufY, from, es_val)
+    //assert err == 0 ==> forall i int :: {es_val[i]} 0 <= i && i < pkts ==> IO_val_Abs(buf[i]) == es_val[i]
+    //assert err == 0 ==> MultiElemWitnessWithIndex(ioSharedArg.IBufY, from, es_val, 0)
     fold SharedInv!< dp, ioSharedArg !>()
     ioLock.Unlock()
     //end of recv
@@ -84,33 +88,37 @@ func rc (ingressID uint16, ghost place io.Place, ghost s io.IO_dp3s_state_local,
     invariant ifsToIO_ifs(ingressID) == from
     invariant acc(ioLock.LockP(), _) && ioLock.LockInv() == SharedInv!< dp, ioSharedArg !>;
     invariant forall i int :: {&buf[i]} 0 <= i && i < len(buf) ==> acc(&buf[i])
-    invariant forall i int :: {&buf[i]} i0 <= i && i < pkts ==> acc(sl.AbsSlice_Bytes(buf[i], 0, len(buf[i])), _) && IO_val_Abs(buf[i]) == es_val[i]
+    invariant forall i int :: {&buf[i]} i0 <= i && i < pkts ==> 
+        acc(sl.AbsSlice_Bytes(buf[i], 0, len(buf[i])), _) && IO_val_Abs(buf[i]) == es_val[i]
     invariant MultiElemWitnessWithIndex(ioSharedArg.IBufY, from, es_val, i0)
     decreases pkts - i0
     for i0 := 0; i0 < pkts; i0++ {
       unfold MultiElemWitnessWithIndex(ioSharedArg.IBufY, from, es_val, i0)
       //assume IO_val_Abs(ub).isIO_val_Pkt2
       ghost newAbsPkt := processPkt(buf[i0], ingressID, ioLock, ioSharedArg, dp)
-      assume newAbsPkt.isIO_val_Pkt2
 
       //send
       ghost ioLock.Lock()
       unfold SharedInv!< dp, ioSharedArg !>()
 
       t, s := *ioSharedArg.Place, *ioSharedArg.State
-
+     ghost if(newAbsPkt.isIO_val_Pkt2) {
       ApplyElemWitness(s.obuf, ioSharedArg.OBufY, newAbsPkt.IO_val_Pkt2_1, newAbsPkt.IO_val_Pkt2_2)
       assert newAbsPkt.IO_val_Pkt2_2 in AsSet(s.obuf[newAbsPkt.IO_val_Pkt2_1])
-      
       assert dp.dp3s_iospec_bio3s_send_guard(s, t, newAbsPkt)
+     }
 
       unfold dp.dp3s_iospec_ordered(s, t)
       unfold dp.dp3s_iospec_bio3s_send(s, t)
 
       tN := io.dp3s_iospec_bio3s_send_T(t, newAbsPkt)
-      io.Send(t, newAbsPkt)
-      ghost *ioSharedArg.Place = tN
-      
+      err := BatchSend(t, newAbsPkt)
+      ghost if(err != 0){
+        fold dp.dp3s_iospec_bio3s_send(s, t)
+        fold dp.dp3s_iospec_ordered(s, t)
+      } else {
+        ghost *ioSharedArg.Place = tN
+      } 
       fold SharedInv!< dp, ioSharedArg !>()
       ghost ioLock.Unlock()
     }
@@ -123,6 +131,7 @@ requires IO_val_Abs(ub).isIO_val_Pkt2 ==> ElemWitness(ioSharedArg.IBufY, ifsToIO
 preserves acc(ioLock.LockP(), _) && ioLock.LockInv() == SharedInv!< dp, ioSharedArg !>;
 ensures acc(sl.AbsSlice_Bytes(ub, 0, len(ub)), _)
 ensures newAbsPkt.isIO_val_Pkt2 ==> ElemWitness(ioSharedArg.OBufY, newAbsPkt.IO_val_Pkt2_1, newAbsPkt.IO_val_Pkt2_2)
+ensures newAbsPkt.isIO_val_Pkt2 || newAbsPkt.isIO_val_Unsupported //if err == nil
 func processPkt(ub Pkt, ghost ingressID uint16, ghost ioLock *sync.Mutex, ghost ioSharedArg SharedArg, ghost dp io.DataPlaneSpec) (ghost newAbsPkt io.IO_val) {
   var pathType int
   //assume IO_val_Abs(ub).isIO_val_Pkt2 ==> pathType == 1
@@ -145,6 +154,7 @@ requires IO_val_Abs(ub).isIO_val_Pkt2 ==> ElemWitness(ioSharedArg.IBufY, IO_val_
 preserves acc(ioLock.LockP(), _) && ioLock.LockInv() == SharedInv!< dp, ioSharedArg !>;
 ensures acc(sl.AbsSlice_Bytes(ub, 0, len(ub)), _)
 ensures newAbsPkt.isIO_val_Pkt2 ==> ElemWitness(ioSharedArg.OBufY, newAbsPkt.IO_val_Pkt2_1, newAbsPkt.IO_val_Pkt2_2)
+ensures newAbsPkt.isIO_val_Pkt2 || newAbsPkt.isIO_val_Unsupported // if err == nil
 func Process(ub Pkt, ghost ioLock *sync.Mutex, ghost ioSharedArg SharedArg, ghost dp io.DataPlaneSpec) (ghost newAbsPkt io.IO_val) {
     ghost absPkt := IO_val_Abs(ub)
    // ghost ingressID := absPkt.IO_val_Pkt2_1
@@ -242,7 +252,7 @@ func Process(ub Pkt, ghost ioLock *sync.Mutex, ghost ioSharedArg SharedArg, ghos
                     assume dp.hf_valid(currseg.ConsDir, currseg.AInfo, traversedseg_inc_curr.UInfo, hf1)
                     assume dp.hf_valid(nextseg.ConsDir, nextseg.AInfo, nextseg.UInfo, hf2) //not clear at the moment
                     assume dp.dp2_check_recvif(currseg.ConsDir, dp.Asid(), get(absPkt.IO_val_Pkt2_1)) //to proof
-                    //assert dp.dp2_xover_common_guard(absPkt.IO_val_Pkt2_2, currseg, nextseg, traversedseg_inc_curr, pkt_intermediate, hf1, hf2, dp.Asid(), get(absPkt.IO_val_Pkt2_1))
+                    assert dp.dp2_xover_common_guard(absPkt.IO_val_Pkt2_2, currseg, nextseg, traversedseg_inc_curr, pkt_intermediate, hf1, hf2, dp.Asid(), get(absPkt.IO_val_Pkt2_1))
                     assume dp.dp2_check_interface_top(nextseg.ConsDir, dp.Asid(), hf2) // must be proven
 
                 if(dp.Asid() in dp.Core()){
@@ -250,7 +260,8 @@ func Process(ub Pkt, ghost ioLock *sync.Mutex, ghost ioSharedArg SharedArg, ghos
                     assume currseg.ConsDir == nextseg.ConsDir //deal with later
                     assert nextif_opt != none[io.IO_ifs]
                     assume get(nextif_opt) in domain(dp.GetNeighborIAs()) // must be proven
-
+                    reveal dp.Valid()
+                    
                     ghost ioLock.Lock()
                     unfold SharedInv!< dp, ioSharedArg !>()
 
@@ -279,7 +290,7 @@ func Process(ub Pkt, ghost ioLock *sync.Mutex, ghost ioSharedArg SharedArg, ghos
                     assume dp.xover_up2down2_link_type(dp.Asid(), hf1, hf2)
                     assert nextif_opt != none[io.IO_ifs]
                     assume get(nextif_opt) in domain(dp.GetNeighborIAs()) // must be proven
-
+                    reveal dp.Valid()
                     ghost ioLock.Lock()
                     unfold SharedInv!< dp, ioSharedArg !>()
 
@@ -311,9 +322,15 @@ func Process(ub Pkt, ghost ioLock *sync.Mutex, ghost ioSharedArg SharedArg, ghos
                 ghost traversedseg_in := io.establishGuardTraversedseg(currseg, !currseg.ConsDir)
                 ghost traversedseg_out := io.establishGuardTraversedsegInc(traversedseg_in, currseg.ConsDir)
                 assume nextif in domain(dp.GetNeighborIAs()) // must be proven
-                // ghost a2 := dp.GetNeighborIA(nextif)
-                // ghost i2 := dp.Lookup(io.AsIfsPair{dp.Asid(), nextif}).ifs
-                // assert dp.is_target(dp.Asid(), nextif, a2, i2) // should be true with dp.Valid()
+                ghost a2 := dp.GetNeighborIA(nextif)
+                reveal dp.Valid()
+                //  ghost i2 := dp.Lookup(io.AsIfsPair{dp.Asid(), nextif}).ifs
+                //  assert dp.is_target(dp.Asid(), nextif, a2, i2) // should be true with dp.Valid()
+                //  ghost pkt_tmp := io.IO_pkt2(io.IO_Packet2{
+                //             traversedseg_in,
+                //             absPkt.IO_val_Pkt2_2.LeftSeg,
+                //             absPkt.IO_val_Pkt2_2.MidSeg,
+                //             absPkt.IO_val_Pkt2_2.RightSeg})
 
                 ghost pkt_internal := io.IO_val(io.IO_Internal_val1{ 
                     absPkt.IO_val_Pkt2_2, 
@@ -336,7 +353,8 @@ func Process(ub Pkt, ghost ioLock *sync.Mutex, ghost ioSharedArg SharedArg, ghos
 
                 ApplyElemWitness(s.ibuf, ioSharedArg.IBufY, absPkt.IO_val_Pkt2_1, absPkt.IO_val_Pkt2_2)
                 assert absPkt.IO_val_Pkt2_2 in AsSet(s.ibuf[absPkt.IO_val_Pkt2_1])
-
+                // assert dp.dp2_enter_guard(pkt_internal.IO_Internal_val1_1,currseg,traversedseg_in,dp.Asid(),hf1,pkt_internal.IO_Internal_val1_2,fut) 
+                // assert dp.dp2_forward_ext_guard(dp.Asid(), pkt_tmp, nextif, traversedseg_in, traversedseg_out, pkt_internal.IO_Internal_val1_3, fut, hf1)
                 assert dp.dp3s_iospec_bio3s_enter_guard(s, t, pkt_internal)
                 unfold dp.dp3s_iospec_ordered(s, t)
                 unfold dp.dp3s_iospec_bio3s_enter(s, t)
